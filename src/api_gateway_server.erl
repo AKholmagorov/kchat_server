@@ -8,7 +8,8 @@ start() ->
     {'_', [
         {"/is_username_exists", is_username_exists, []},
         {"/sign_up", sign_up, []},
-        {"/auth", auth, []}
+        {"/auth", auth, []},
+        {"/ws", ws_handler, []}
     ]}
   ]),
 
