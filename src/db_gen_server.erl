@@ -4,21 +4,17 @@
 -export([init/1, handle_call/3, handle_cast/2]).
 -export([start/0, prepared_query/2, exe_query/1]).
 
-% =============================================
-% API
-% =============================================
-
 start() ->
-  gen_server:start_link({local, main}, ?MODULE, [], []).
+  gen_server:start_link({local, db_gs}, ?MODULE, [], []).
 
 prepared_query(Query, Params) ->
-  gen_server:call(main, {prepared_query, Query, Params}).
+  gen_server:call(db_gs, {prepared_query, Query, Params}).
 
 exe_query(Query) ->
-  gen_server:call(main, {exe_query, Query}).
+  gen_server:call(db_gs, {exe_query, Query}).
 
 % =============================================
-% gen_server
+%                     API
 % =============================================
 
 init([]) ->

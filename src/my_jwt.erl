@@ -1,5 +1,5 @@
--module(jwt).
--export([generate_jwk/1]).
+-module(my_jwt).
+-export([generate_jwk/1, load_jwk/0]).
 
 -define(JWK_FILE, "/home/casper/Projects/Erlang/kchat_server/jwk.json").
 

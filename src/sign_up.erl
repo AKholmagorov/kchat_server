@@ -15,8 +15,8 @@ init(Req, State) ->
   Status = case db_gen_server:prepared_query(Query, [Username, Password, Avatar]) of
              ok ->
                Query2 = "SELECT id FROM users WHERE username = ?",
-               {ok, [ID], _} = db_gen_server:prepared_query(Query2, [Username]),
-               jsx:encode(#{status => true, jwt => jwt:generate_jwk(ID)});
+               {ok, _, [[ID]]} = db_gen_server:prepared_query(Query2, [Username]),
+               jsx:encode(#{status => true, jwt => my_jwt:generate_jwk(ID)});
              _ ->
                jsx:encode(#{status => false})
            end,

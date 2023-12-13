@@ -3,6 +3,7 @@
 
 start() ->
   db_gen_server:start(),
+  users_manager_gs:start(),
 
   Dispatch = cowboy_router:compile([
     {'_', [

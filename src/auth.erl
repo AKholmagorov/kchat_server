@@ -16,7 +16,7 @@ init(Req, _State) ->
   IsUserExists =
     case db_gen_server:prepared_query(Query, [Username, Password]) of
       {ok, _, [[UserID]]} ->
-        jsx:encode(#{status => true, jwt => jwt:generate_jwk(UserID)});
+        jsx:encode(#{status => true, jwt => my_jwt:generate_jwk(UserID)});
       _ ->
         jsx:encode(#{status => false})
     end,
