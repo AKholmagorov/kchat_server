@@ -9,11 +9,11 @@ start() ->
 
 make_user_online(ID, Pid) ->
   gen_server:call(um_gs, {make_user_online, ID, Pid}),
-  gen_server:cast(um_gs, broadcast_new_status).
+  gen_server:cast(um_gs, {broadcast_online_status, ID, true}).
 
 make_user_offline(ID) ->
-  gen_server:call(um_gs, {make_user_offline, ID}),
-  gen_server:cast(um_gs, broadcast_new_status).
+  UpdatedLastSeen = gen_server:call(um_gs, {make_user_offline, ID}),
+  gen_server:cast(um_gs, {broadcast_offline_status, ID, false, UpdatedLastSeen}).
 
 
 % =============================================
@@ -36,12 +36,16 @@ handle_call({make_user_offline, ID}, _From, State) ->
   ok = db_gen_server:prepared_query(Query, [ID]),
 
   Query2 = "UPDATE users SET lastSeen = ? WHERE id = ?",
-  Timestamp = erlang:system_time(seconds),
-  ok = db_gen_server:prepared_query(Query2, [Timestamp, ID]),
+  UpdatedLastSeen = erlang:system_time(seconds),
+  ok = db_gen_server:prepared_query(Query2, [UpdatedLastSeen, ID]),
 
   NewState = maps:remove(ID, State),
-  {reply, ok, NewState}.
+  {reply, UpdatedLastSeen, NewState}.
 
-handle_cast(broadcast_new_status, State) ->
-  maps:fold(fun(ID, Pid, _Acc) -> Pid ! {user_status_updated, ID} end, 0, State),
+handle_cast({broadcast_online_status, UpdatedUserID, NewStatus}, State) ->
+  maps:fold(fun(_ID, Pid, _Acc) -> Pid ! {user_status_updated, UpdatedUserID, NewStatus, null} end, 0, State),
+  {noreply, State};
+
+handle_cast({broadcast_offline_status, UpdatedUserID, NewStatus, UpdatedLastSeen}, State) ->
+  maps:fold(fun(_ID, Pid, _Acc) -> Pid ! {user_status_updated, UpdatedUserID, NewStatus, UpdatedLastSeen} end, 0, State),
   {noreply, State}.

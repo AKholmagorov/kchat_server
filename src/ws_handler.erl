@@ -28,7 +28,6 @@ websocket_init(State) ->
   {ok, State}.
 
 websocket_handle({text, <<"get_users">>}, State) ->
-  io:format("get_users...~p~n", [self()]),
   Query = "SELECT id, username, avatar, bio, isOnline, lastSeen FROM users",
   {ok, _, Rows} = db_gen_server:exe_query(Query),
 
@@ -40,9 +39,17 @@ websocket_handle({text, <<"get_users">>}, State) ->
 
   {reply, {text, jsx:encode(#{users => Users, rep_type => <<"get_users">>})}, State}.
 
-websocket_info({user_status_updated, ID}, State) ->
-  io:format("*** websocket_info ***~n"),
-  {[{text, jsx:encode(#{id => ID, rep_type => <<"user_status_updated">>})}], State}.
+websocket_info({user_status_updated, ID, NewStatus, UpdatedLastSeen}, State) ->
+  {
+    [
+      {text, jsx:encode(#{id => ID,
+          rep_type => <<"user_status_updated">>,
+          newStatus => NewStatus,
+          updatedLastSeen => UpdatedLastSeen})
+      }
+    ],
+    State
+  }.
 
 terminate(_Reason, _WebSocket, State) ->
   case is_number(State) of
