@@ -25,7 +25,6 @@ init([]) ->
 
 handle_call({make_user_online, ID, Pid}, _From, State) ->
   Query = "UPDATE users SET isOnline = 1 WHERE id = ?",
-  io:format("ID_from_call: ~p~n", [ID]),
   ok = db_gen_server:prepared_query(Query, [ID]),
 
   NewState = maps:put(ID, Pid, State),
