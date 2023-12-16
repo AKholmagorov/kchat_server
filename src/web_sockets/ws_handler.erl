@@ -18,6 +18,7 @@ init(Req, State) ->
           {ok, Req, State}
       end;
     _ ->
+      io:format("Invalid token"),
       {ok, Req, State}
   end.
 

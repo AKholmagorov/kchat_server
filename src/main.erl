@@ -1,4 +1,4 @@
--module(api_gateway_server).
+-module(main).
 -export([start/0]).
 
 start() ->
