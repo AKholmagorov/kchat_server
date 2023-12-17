@@ -2,12 +2,15 @@
 -behavior(gen_server).
 
 -export([init/1, handle_call/3, handle_cast/2]).
--export([start/0, make_user_online/2, make_user_offline/1, make_users_offline_after_shutdown/0]).
+-export([start/0, make_user_online/2, make_user_offline/1, make_users_offline_after_shutdown/0, ntf_about_new_chat_if_online/2, ntf_about_new_message_if_online/2]).
+
+%% State contains map of online users #{ID => Pid}
 
 start() ->
   gen_server:start_link({local, um_gs}, ?MODULE, [], []).
 
 make_user_online(ID, Pid) ->
+  io:format("make_user_online~n"),
   gen_server:call(um_gs, {make_user_online, ID, Pid}),
   gen_server:cast(um_gs, {broadcast_online_status, ID, true}).
 
@@ -20,6 +23,12 @@ make_user_offline(ID) ->
 make_users_offline_after_shutdown() ->
   ok = gen_server:call(um_gs, {make_users_offline_after_shutdown}).
 
+ntf_about_new_chat_if_online(ReceiverID, NewChatInstance) ->
+  ok = gen_server:cast(um_gs, {ntf_about_new_chat_if_online, ReceiverID, NewChatInstance}).
+
+ntf_about_new_message_if_online(ChatID, Msg) ->
+  io:format("ntf_about_new_message_if_online~n"),
+  ok = gen_server:cast(um_gs, {ntf_about_new_message_if_online, ChatID, Msg}).
 
 % =============================================
 %                     API
@@ -52,10 +61,40 @@ handle_call({make_users_offline_after_shutdown}, _From, State) ->
 
   {reply, ok, State}.
 
+handle_cast({ntf_about_new_chat_if_online, ReceiverID, NewChatInstance}, State) ->
+  io:format("handle_cast~n"),
+  %% check if receiver is online
+  case maps:get(ReceiverID, State, undefined) of
+    undefined ->
+      io:format("User is offline~n"), ok;
+    ReceiverPID ->
+      io:format("Receiver is online. PID: ~p~n", [ReceiverPID]),
+      ReceiverPID ! {chat_invitation, NewChatInstance}
+  end,
+  {noreply, State};
+
+handle_cast({ntf_about_new_message_if_online, ChatID, Msg}, State) ->
+  OnlineUsersID = maps:keys(State),
+  SenderID = maps:get(<<"senderID">>, Msg),
+
+  Query = "SELECT COUNT(*) FROM chat_participants WHERE chatID = ? AND userID = ? AND userID != ?",
+
+  lists:foreach(fun(UserID) ->
+                  case db_gen_server:prepared_query(Query, [ChatID, UserID, SenderID]) of
+                    {ok, _, [[1]]} ->
+                      Pid = maps:get(UserID, State),
+                      Pid ! {ntf_about_new_message_if_online, Msg};
+                    _ -> io:format("Not this user's chat")
+                  end
+                end, OnlineUsersID),
+  {noreply, State};
+
 handle_cast({broadcast_online_status, UpdatedUserID, NewStatus}, State) ->
+  io:format("broadcast_online_status~n"),
   maps:fold(fun(_ID, Pid, _Acc) -> Pid ! {user_status_updated, UpdatedUserID, NewStatus, null} end, 0, State),
   {noreply, State};
 
 handle_cast({broadcast_offline_status, UpdatedUserID, NewStatus, UpdatedLastSeen}, State) ->
-  maps:fold(fun(_ID, Pid, _Acc) -> Pid ! {user_status_updated, UpdatedUserID, NewStatus, UpdatedLastSeen} end, 0, State),
+  maps:fold(fun(_ID, Pid, _Acc) ->
+    Pid ! {user_status_updated, UpdatedUserID, NewStatus, UpdatedLastSeen} end, 0, State),
   {noreply, State}.

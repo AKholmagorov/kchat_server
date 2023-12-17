@@ -30,6 +30,7 @@ websocket_init(State) ->
 websocket_handle({text, JSON}, State) ->
   DecodedJSON = jsx:decode(JSON, [return_maps]),
   case maps:get(<<"req_type">>, DecodedJSON) of
+    <<"get_current_user">> -> ws_func:get_current_user(State);
     <<"get_users">> -> ws_func:get_users(State);
     <<"get_chats">> -> ws_func:get_chats(State);
     <<"create_chat">> -> ws_func:create_chat(DecodedJSON, State);
@@ -41,17 +42,34 @@ websocket_handle({text, JSON}, State) ->
   end.
 
 websocket_info({user_status_updated, ID, NewStatus, UpdatedLastSeen}, State) ->
+  io:format("user_status_updated~n"),
   {
     [{
       text,
       jsx:encode(#{
         id => ID,
-        rep_type => <<"user_status_updated">>,
+        res_type => <<"user_status_updated">>,
         newStatus => NewStatus,
         updatedLastSeen => UpdatedLastSeen})
     }],
     State
-  }.
+  };
+
+websocket_info({chat_invitation, NewChatInstance}, State) ->
+  {
+    [{
+      text,
+      jsx:encode(
+        #{
+          res_type => <<"chat_created">>,
+          chat => NewChatInstance
+        })
+    }],
+    State
+  };
+
+websocket_info({ntf_about_new_message_if_online, Msg}, State) ->
+  {[{text, jsx:encode(#{res_type => <<"new_message">>, msg => Msg})}], State}.
 
 terminate(_Reason, _WebSocket, State) ->
   case is_number(State) of

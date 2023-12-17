@@ -1,5 +1,5 @@
 -module(ws_func).
--export([create_chat/2, get_messages/2, send_message/2, get_users/1, get_chats/1]).
+-export([create_chat/2, get_messages/2, send_message/2, get_users/1, get_chats/1, get_current_user/1]).
 
 create_chat(DecodedJSON, State) ->
   ReceiverID = maps:get(<<"receiverID">>, DecodedJSON),
@@ -14,38 +14,52 @@ create_chat(DecodedJSON, State) ->
   ok = db_gen_server:prepared_query(Query2, [NewChatID, State]),
   ok = db_gen_server:prepared_query(Query2, [NewChatID, ReceiverID]),
 
+  NewChatInstance = get_chat(NewChatID, ReceiverID),
+  ok = users_manager_gs:ntf_about_new_chat_if_online(ReceiverID, NewChatInstance),
+
   {reply, {text, jsx:encode(#{res_type => <<"chat_created">>, chat => get_chat(NewChatID, State)})}, State}.
 
 get_messages(ChatID, State) ->
   io:format("message_got~n"),
-  Query = "SELECT * FROM messages WHERE chatID = ?",
-  {ok, _, Result} = db_gen_server:prepared_query(Query, [ChatID]),
+
+  %% mark fetched messages as read
+  %% Query = "UPDATE messages SET isRead = 1 WHERE senderID != ?",
+  %% ok = db_gen_server:prepared_query(Query, [State]),
+
+  Query3 = "SELECT * FROM messages WHERE chatID = ?",
+  {ok, _, Result} = db_gen_server:prepared_query(Query3, [ChatID]),
 
   Messages = lists:map(fun(Row) ->
-    [MsgID, ChatID, SenderID, Date, Text] = Row,
+    [MsgID, ChatID, SenderID, Date, Text, IsRead] = Row,
     #{msgID => MsgID, chatID => ChatID,
-      senderID => SenderID, date => Date, text => Text}
+      senderID => SenderID, date => Date, text => Text, isRead => IsRead}
                        end, Result),
 
   {reply, {text, jsx:encode(#{res_type => <<"get_messages">>, chatID => ChatID, messages => Messages})}, State}.
 
 send_message(DecodedJSON, State) ->
-  ChatID = maps:get(<<"chatID">>, DecodedJSON),
-  Text = maps:get(<<"text">>, DecodedJSON),
-  Date = maps:get(<<"date">>, DecodedJSON),
+  Msg = maps:get(<<"msg">>, DecodedJSON),
+  ChatID = maps:get(<<"chatID">>, Msg),
+  Text = maps:get(<<"text">>, Msg),
+  Date = maps:get(<<"date">>, Msg),
 
   Query0 = "INSERT INTO messages (chatID, senderID, text, date)
-                  VALUES(?, ?, ?, ?)",
+            VALUES(?, ?, ?, ?)",
   Query1 = "SELECT LAST_INSERT_ID()",
 
   ok = db_gen_server:prepared_query(Query0, [ChatID, State, Text, Date]),
   {ok, _, [[MessageID]]} = db_gen_server:exe_query(Query1),
 
-  {reply, {text, jsx:encode(#{res_type => <<"messages_sent">>, msgID => MessageID})}, State}.
+  %% send online user(-s) new message from chat
+  users_manager_gs:ntf_about_new_message_if_online(ChatID, Msg),
+
+  {reply, {text, jsx:encode(#{res_type => <<"message_sent">>, msgID => MessageID})}, State}.
 
 get_users(State) ->
-  Query = "SELECT id, username, avatar, bio, isOnline, lastSeen FROM users",
-  {ok, _, Rows} = db_gen_server:exe_query(Query),
+  Query = "SELECT id, username, avatar, bio, isOnline, lastSeen
+           FROM users
+           WHERE id != ?",
+  {ok, _, Rows} = db_gen_server:prepared_query(Query, [State]),
 
   Users = lists:map(fun(Row) ->
     [Id, Username, Avatar, Bio, Online, LastSeen] = Row,
@@ -54,6 +68,18 @@ get_users(State) ->
                     end, Rows),
 
   {reply, {text, jsx:encode(#{users => Users, res_type => <<"get_users">>})}, State}.
+
+get_current_user(State) ->
+  Query = "SELECT id, username, avatar, bio, isOnline, lastSeen
+           FROM users
+           WHERE id = ?",
+  {ok, _, [Result]} = db_gen_server:prepared_query(Query, [State]),
+
+  [Id, Username, Avatar, Bio, Online, LastSeen] = Result,
+  User = #{id => Id, username => Username, avatar => Avatar,
+    isOnline => Online, lastSeen => LastSeen, bio => Bio},
+
+  {reply, {text, jsx:encode(#{user => User, res_type => <<"get_current_user">>})}, State}.
 
 get_chats(State) ->
   Query = "SELECT chat_participants.chatID, chat_participants.userID, chats.isPersonal
