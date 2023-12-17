@@ -6,9 +6,9 @@
 %% State contains current user ID
 
 init(Req, State) ->
-  Token = cowboy_req:match_qs(['token'], Req),
-  case maps:get('token', Token, undefined) of
-    JWT when is_binary(JWT) ->
+  Token = cowboy_req:match_qs([token], Req),
+  case maps:get(token, Token, undefined) of
+    JWT ->
       case jose_jwt:verify(my_jwt:load_jwk(), JWT) of
         {true, {jose_jwt, Claims}, _} ->
           ID = maps:get(<<"id">>, Claims),
