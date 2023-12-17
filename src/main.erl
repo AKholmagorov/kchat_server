@@ -4,6 +4,7 @@
 start() ->
   db_gen_server:start(),
   users_manager_gs:start(),
+  users_manager_gs:make_users_offline_after_shutdown(),
 
   Dispatch = cowboy_router:compile([
     {'_', [

@@ -2,7 +2,7 @@
 -behavior(gen_server).
 
 -export([init/1, handle_call/3, handle_cast/2]).
--export([start/0, make_user_online/2, make_user_offline/1]).
+-export([start/0, make_user_online/2, make_user_offline/1, make_users_offline_after_shutdown/0]).
 
 start() ->
   gen_server:start_link({local, um_gs}, ?MODULE, [], []).
@@ -14,6 +14,11 @@ make_user_online(ID, Pid) ->
 make_user_offline(ID) ->
   UpdatedLastSeen = gen_server:call(um_gs, {make_user_offline, ID}),
   gen_server:cast(um_gs, {broadcast_offline_status, ID, false, UpdatedLastSeen}).
+
+%% after server crash online users didn't change their status.
+%% this function make all users offline on server start up.
+make_users_offline_after_shutdown() ->
+  ok = gen_server:call(um_gs, {make_users_offline_after_shutdown}).
 
 
 % =============================================
@@ -39,7 +44,13 @@ handle_call({make_user_offline, ID}, _From, State) ->
   ok = db_gen_server:prepared_query(Query2, [UpdatedLastSeen, ID]),
 
   NewState = maps:remove(ID, State),
-  {reply, UpdatedLastSeen, NewState}.
+  {reply, UpdatedLastSeen, NewState};
+
+handle_call({make_users_offline_after_shutdown}, _From, State) ->
+  Query = "UPDATE users SET isOnline = 0",
+  ok = db_gen_server:exe_query(Query),
+
+  {reply, ok, State}.
 
 handle_cast({broadcast_online_status, UpdatedUserID, NewStatus}, State) ->
   maps:fold(fun(_ID, Pid, _Acc) -> Pid ! {user_status_updated, UpdatedUserID, NewStatus, null} end, 0, State),
