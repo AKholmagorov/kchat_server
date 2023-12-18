@@ -2,7 +2,7 @@
 -behavior(gen_server).
 
 -export([init/1, handle_call/3, handle_cast/2]).
--export([start/0, make_user_online/2, make_user_offline/1, make_users_offline_after_shutdown/0, ntf_about_new_chat_if_online/2, ntf_about_new_message_if_online/2]).
+-export([start/0, make_user_online/2, make_user_offline/1, make_users_offline_after_shutdown/0, ntf_about_new_chat_if_online/2, ntf_about_new_message_if_online/2, broadcast_msgs_have_read/2]).
 
 %% State contains map of online users #{ID => Pid}
 
@@ -27,8 +27,10 @@ ntf_about_new_chat_if_online(ReceiverID, NewChatInstance) ->
   ok = gen_server:cast(um_gs, {ntf_about_new_chat_if_online, ReceiverID, NewChatInstance}).
 
 ntf_about_new_message_if_online(ChatID, Msg) ->
-  io:format("ntf_about_new_message_if_online~n"),
   ok = gen_server:cast(um_gs, {ntf_about_new_message_if_online, ChatID, Msg}).
+
+broadcast_msgs_have_read(ChatID, BroadcastInstigatorID) ->
+  ok = gen_server:cast(um_gs, {broadcast_msgs_have_read, ChatID, BroadcastInstigatorID}).
 
 % =============================================
 %                     API
@@ -62,7 +64,6 @@ handle_call({make_users_offline_after_shutdown}, _From, State) ->
   {reply, ok, State}.
 
 handle_cast({ntf_about_new_chat_if_online, ReceiverID, NewChatInstance}, State) ->
-  io:format("handle_cast~n"),
   %% check if receiver is online
   case maps:get(ReceiverID, State, undefined) of
     undefined ->
@@ -90,11 +91,27 @@ handle_cast({ntf_about_new_message_if_online, ChatID, Msg}, State) ->
   {noreply, State};
 
 handle_cast({broadcast_online_status, UpdatedUserID, NewStatus}, State) ->
-  io:format("broadcast_online_status~n"),
   maps:fold(fun(_ID, Pid, _Acc) -> Pid ! {user_status_updated, UpdatedUserID, NewStatus, null} end, 0, State),
   {noreply, State};
 
 handle_cast({broadcast_offline_status, UpdatedUserID, NewStatus, UpdatedLastSeen}, State) ->
   maps:fold(fun(_ID, Pid, _Acc) ->
     Pid ! {user_status_updated, UpdatedUserID, NewStatus, UpdatedLastSeen} end, 0, State),
+  {noreply, State};
+
+handle_cast({broadcast_msgs_have_read, ChatID, BroadcastInstigatorID}, State) ->
+  OnlineUsersID = maps:keys(State),
+  Query = "SELECT COUNT(*) FROM chat_participants WHERE chatID = ? AND userID = ? AND userID != ?",
+
+  %% send ntf that messages was read except receiver
+  lists:foreach(fun(UserID) ->
+    case db_gen_server:prepared_query(Query, [ChatID, UserID, BroadcastInstigatorID]) of
+      {ok, _, [[1]]} ->
+        Pid = maps:get(UserID, State),
+        Pid ! {broadcast_msgs_have_read, ChatID},
+        io:format("Receiver is online ~p. Messages have marked as read.", [UserID]);
+      Another -> io:format("Receiver is offline ~p. SQL result: ~p~n", [UserID, Another])
+    end
+                end, OnlineUsersID),
+
   {noreply, State}.

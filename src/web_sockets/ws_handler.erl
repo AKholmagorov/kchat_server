@@ -35,6 +35,7 @@ websocket_handle({text, JSON}, State) ->
     <<"get_chats">> -> ws_func:get_chats(State);
     <<"create_chat">> -> ws_func:create_chat(DecodedJSON, State);
     <<"send_message">> -> ws_func:send_message(DecodedJSON, State);
+    <<"mark_messages_as_read">> -> ws_func:mark_messages_as_read(DecodedJSON, State);
     <<"get_messages">> ->
       ChatID = maps:get(<<"chatID">>, DecodedJSON),
       ws_func:get_messages(ChatID, State);
@@ -69,7 +70,11 @@ websocket_info({chat_invitation, NewChatInstance}, State) ->
   };
 
 websocket_info({ntf_about_new_message_if_online, Msg}, State) ->
-  {[{text, jsx:encode(#{res_type => <<"new_message">>, msg => Msg})}], State}.
+  io:format("ntf_about_new_message_if_online"),
+  {[{text, jsx:encode(#{res_type => <<"new_message">>, msg => Msg})}], State};
+
+websocket_info({broadcast_msgs_have_read, ChatID}, State) ->
+  {[{text, jsx:encode(#{res_type => <<"messages_read">>, chatID => ChatID})}], State}.
 
 terminate(_Reason, _WebSocket, State) ->
   case is_number(State) of

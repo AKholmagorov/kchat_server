@@ -1,5 +1,5 @@
 -module(ws_func).
--export([create_chat/2, get_messages/2, send_message/2, get_users/1, get_chats/1, get_current_user/1]).
+-export([create_chat/2, get_messages/2, send_message/2, get_users/1, get_chats/1, get_current_user/1, mark_messages_as_read/2]).
 
 create_chat(DecodedJSON, State) ->
   ReceiverID = maps:get(<<"receiverID">>, DecodedJSON),
@@ -22,9 +22,9 @@ create_chat(DecodedJSON, State) ->
 get_messages(ChatID, State) ->
   io:format("message_got~n"),
 
-  %% mark fetched messages as read
-  %% Query = "UPDATE messages SET isRead = 1 WHERE senderID != ?",
-  %% ok = db_gen_server:prepared_query(Query, [State]),
+  %% mark fetched messages as read TODO: refactor on fun call
+  Query = "UPDATE messages SET isRead = 1 WHERE senderID != ?",
+  ok = db_gen_server:prepared_query(Query, [State]),
 
   Query3 = "SELECT * FROM messages WHERE chatID = ?",
   {ok, _, Result} = db_gen_server:prepared_query(Query3, [ChatID]),
@@ -35,7 +35,19 @@ get_messages(ChatID, State) ->
       senderID => SenderID, date => Date, text => Text, isRead => IsRead}
                        end, Result),
 
+  %% notify others that messages was read
+  users_manager_gs:broadcast_msgs_have_read(ChatID, State),
+
   {reply, {text, jsx:encode(#{res_type => <<"get_messages">>, chatID => ChatID, messages => Messages})}, State}.
+
+mark_messages_as_read(DecodedJSON, State) ->
+  ChatID = map_get(<<"chatID">>, DecodedJSON),
+
+  Query = "UPDATE messages SET isRead = 1 WHERE senderID != ?",
+  ok = db_gen_server:prepared_query(Query, [State]),
+  users_manager_gs:broadcast_msgs_have_read(ChatID, State),
+
+  {reply, {text, jsx:encode(#{res_type => <<"messages_marked_read">>, chatID => ChatID})}, State}.
 
 send_message(DecodedJSON, State) ->
   Msg = maps:get(<<"msg">>, DecodedJSON),
@@ -54,6 +66,7 @@ send_message(DecodedJSON, State) ->
   users_manager_gs:ntf_about_new_message_if_online(ChatID, Msg),
 
   {reply, {text, jsx:encode(#{res_type => <<"message_sent">>, msgID => MessageID})}, State}.
+
 
 get_users(State) ->
   Query = "SELECT id, username, avatar, bio, isOnline, lastSeen
