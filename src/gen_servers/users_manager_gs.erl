@@ -10,7 +10,6 @@ start() ->
   gen_server:start_link({local, um_gs}, ?MODULE, [], []).
 
 make_user_online(ID, Pid) ->
-  io:format("make_user_online~n"),
   gen_server:call(um_gs, {make_user_online, ID, Pid}),
   gen_server:cast(um_gs, {broadcast_online_status, ID, true}).
 
@@ -18,7 +17,7 @@ make_user_offline(ID) ->
   UpdatedLastSeen = gen_server:call(um_gs, {make_user_offline, ID}),
   gen_server:cast(um_gs, {broadcast_offline_status, ID, false, UpdatedLastSeen}).
 
-%% after server crash online users didn't change their status.
+%% after server crash online users didn't change their status,
 %% this function make all users offline on server start up.
 make_users_offline_after_shutdown() ->
   ok = gen_server:call(um_gs, {make_users_offline_after_shutdown}).
@@ -67,9 +66,8 @@ handle_cast({ntf_about_new_chat_if_online, ReceiverID, NewChatInstance}, State) 
   %% check if receiver is online
   case maps:get(ReceiverID, State, undefined) of
     undefined ->
-      io:format("User is offline~n"), ok;
+      ok;
     ReceiverPID ->
-      io:format("Receiver is online. PID: ~p~n", [ReceiverPID]),
       ReceiverPID ! {chat_invitation, NewChatInstance}
   end,
   {noreply, State};
@@ -85,7 +83,7 @@ handle_cast({ntf_about_new_message_if_online, ChatID, Msg}, State) ->
                     {ok, _, [[1]]} ->
                       Pid = maps:get(UserID, State),
                       Pid ! {ntf_about_new_message_if_online, Msg};
-                    _ -> io:format("Not this user's chat")
+                    _ -> ok
                   end
                 end, OnlineUsersID),
   {noreply, State};
@@ -105,13 +103,12 @@ handle_cast({broadcast_msgs_have_read, ChatID, BroadcastInstigatorID}, State) ->
 
   %% send ntf that messages was read except receiver
   lists:foreach(fun(UserID) ->
-    case db_gen_server:prepared_query(Query, [ChatID, UserID, BroadcastInstigatorID]) of
-      {ok, _, [[1]]} ->
-        Pid = maps:get(UserID, State),
-        Pid ! {broadcast_msgs_have_read, ChatID},
-        io:format("Receiver is online ~p. Messages have marked as read.", [UserID]);
-      Another -> io:format("Receiver is offline ~p. SQL result: ~p~n", [UserID, Another])
-    end
+                  case db_gen_server:prepared_query(Query, [ChatID, UserID, BroadcastInstigatorID]) of
+                    {ok, _, [[1]]} ->
+                      Pid = maps:get(UserID, State),
+                      Pid ! {broadcast_msgs_have_read, ChatID};
+                    _ -> ok
+                  end
                 end, OnlineUsersID),
 
   {noreply, State}.

@@ -8,7 +8,6 @@ create_chat(DecodedJSON, State) ->
   ok = db_gen_server:exe_query(Query1),
 
   {ok, _, [[NewChatID]]} = db_gen_server:exe_query(<<"SELECT LAST_INSERT_ID()">>),
-  io:format("New chat has created: ~p~n", [NewChatID]),
 
   Query2 = "INSERT INTO chat_participants (chatID, userID) VALUES(?, ?)",
   ok = db_gen_server:prepared_query(Query2, [NewChatID, State]),
@@ -19,8 +18,8 @@ create_chat(DecodedJSON, State) ->
 
   {reply, {text, jsx:encode(#{res_type => <<"chat_created">>, chat => get_chat(NewChatID, State)})}, State}.
 
-get_messages(ChatID, State) ->
-  io:format("message_got~n"),
+get_messages(DecodedJSON, State) ->
+  ChatID = maps:get(<<"chatID">>, DecodedJSON),
 
   %% mark fetched messages as read TODO: refactor on fun call
   Query = "UPDATE messages SET isRead = 1 WHERE senderID != ?",
@@ -45,6 +44,10 @@ mark_messages_as_read(DecodedJSON, State) ->
 
   Query = "UPDATE messages SET isRead = 1 WHERE senderID != ?",
   ok = db_gen_server:prepared_query(Query, [State]),
+
+  Query2 = "UPDATE chat_participants SET unreadMsgCount = 0 WHERE userID = ?",
+  db_gen_server:prepared_query(Query2, [State]),
+
   users_manager_gs:broadcast_msgs_have_read(ChatID, State),
 
   {reply, {text, jsx:encode(#{res_type => <<"messages_marked_read">>, chatID => ChatID})}, State}.
@@ -58,15 +61,18 @@ send_message(DecodedJSON, State) ->
   Query0 = "INSERT INTO messages (chatID, senderID, text, date)
             VALUES(?, ?, ?, ?)",
   Query1 = "SELECT LAST_INSERT_ID()",
+  Query2 = "UPDATE chats SET lastMsg = ? WHERE id = ?",
+  Query3 = "UPDATE chat_participants SET unreadMsgCount = unreadMsgCount + 1 WHERE userID != ?",
 
   ok = db_gen_server:prepared_query(Query0, [ChatID, State, Text, Date]),
   {ok, _, [[MessageID]]} = db_gen_server:exe_query(Query1),
+  ok = db_gen_server:prepared_query(Query2, [Text, ChatID]),
+  ok = db_gen_server:prepared_query(Query3, [State]),
 
   %% send online user(-s) new message from chat
   users_manager_gs:ntf_about_new_message_if_online(ChatID, Msg),
 
   {reply, {text, jsx:encode(#{res_type => <<"message_sent">>, msgID => MessageID})}, State}.
-
 
 get_users(State) ->
   Query = "SELECT id, username, avatar, bio, isOnline, lastSeen
@@ -95,38 +101,52 @@ get_current_user(State) ->
   {reply, {text, jsx:encode(#{user => User, res_type => <<"get_current_user">>})}, State}.
 
 get_chats(State) ->
-  Query = "SELECT chat_participants.chatID, chat_participants.userID, chats.isPersonal
-           FROM chat_participants
-           JOIN chats ON chat_participants.chatID = chats.id
-           WHERE chat_participants.chatID IN
-           (SELECT chatID FROM chat_participants WHERE userID = ?)
-           AND chat_participants.userID != ?;",
-  {ok, _, Result} = db_gen_server:prepared_query(Query, [State, State]),
+  %% Get chat info: opponent avatar, username, id; unreadMsgCount, lastMsg, chatID
+  Query = "SELECT
+              cp.chatID,
+              cp.userID,
+              c.isPersonal,
+              c.lastMsg,
+              (SELECT cp2.unreadMsgCount
+               FROM chat_participants cp2
+               WHERE cp2.chatID = cp.chatID AND cp2.userID = ?) AS unreadMsgCount
+          FROM
+              chat_participants cp
+          JOIN
+              chats c ON cp.chatID = c.id
+          WHERE
+              cp.chatID IN (SELECT chatID FROM chat_participants WHERE userID = ?)
+              AND cp.userID != ?;",
+  {ok, _, Result} = db_gen_server:prepared_query(Query, [State, State, State]),
 
   Chats = case Result of
             [] -> null;
             _ -> lists:map(fun(Row) ->
-              [ChatID, ReceiverID, IsPersonal] = Row,
-              #{chatID => ChatID, receiverID => ReceiverID,
-                isPersonal => IsPersonal, lastMessage => <<"The last message.">>}
+              [ChatID, ReceiverID, IsPersonal, LastMsg, UnreadMsgCount] = Row,
+              #{chatID => ChatID,
+                receiverID => ReceiverID,
+                isPersonal => IsPersonal,
+                lastMessage => LastMsg,
+                unreadMsgCount => UnreadMsgCount}
                            end, Result)
           end,
 
   {reply, {text, jsx:encode(#{chats => Chats, res_type => <<"get_chats">>})}, State}.
 
 get_chat(ChatID, State) ->
-  Query = "SELECT chat_participants.chatID, chat_participants.userID, chats.isPersonal
+  Query = "SELECT chat_participants.chatID, chat_participants.userID, chats.isPersonal, chat_participants.unreadMsgCount
            FROM chat_participants
            JOIN chats ON chat_participants.chatID = chats.id
            WHERE chats.id = ?
            AND chat_participants.userID != ?;",
   {ok, _, [Result]} = db_gen_server:prepared_query(Query, [ChatID, State]),
 
-  [ChatID, ReceiverID, IsPersonal] = Result,
+  [ChatID, ReceiverID, IsPersonal, UnreadMsgCount] = Result,
 
   #{
     chatID => ChatID,
     receiverID => ReceiverID,
     isPersonal => IsPersonal,
-    lastMessage => <<"The last message.">>
+    lastMessage => <<"The last message.">>,
+    unreadMsgCount => UnreadMsgCount
   }.
