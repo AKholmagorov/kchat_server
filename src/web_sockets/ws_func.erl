@@ -42,11 +42,11 @@ get_messages(DecodedJSON, State) ->
 mark_messages_as_read(DecodedJSON, State) ->
   ChatID = map_get(<<"chatID">>, DecodedJSON),
 
-  Query = "UPDATE messages SET isRead = 1 WHERE senderID != ?",
-  ok = db_gen_server:prepared_query(Query, [State]),
+  Query = "UPDATE messages SET isRead = 1 WHERE senderID != ? AND chatID = ?",
+  ok = db_gen_server:prepared_query(Query, [State, ChatID]),
 
-  Query2 = "UPDATE chat_participants SET unreadMsgCount = 0 WHERE userID = ?",
-  db_gen_server:prepared_query(Query2, [State]),
+  Query2 = "UPDATE chat_participants SET unreadMsgCount = 0 WHERE userID = ? AND chatID = ?",
+  db_gen_server:prepared_query(Query2, [State, ChatID]),
 
   users_manager_gs:broadcast_msgs_have_read(ChatID, State),
 
@@ -61,13 +61,15 @@ send_message(DecodedJSON, State) ->
   Query0 = "INSERT INTO messages (chatID, senderID, text, date)
             VALUES(?, ?, ?, ?)",
   Query1 = "SELECT LAST_INSERT_ID()",
-  Query2 = "UPDATE chats SET lastMsg = ? WHERE id = ?",
-  Query3 = "UPDATE chat_participants SET unreadMsgCount = unreadMsgCount + 1 WHERE userID != ?",
-
   ok = db_gen_server:prepared_query(Query0, [ChatID, State, Text, Date]),
   {ok, _, [[MessageID]]} = db_gen_server:exe_query(Query1),
-  ok = db_gen_server:prepared_query(Query2, [Text, ChatID]),
-  ok = db_gen_server:prepared_query(Query3, [State]),
+
+  Query2 = "UPDATE chats SET lastMsg = ?, lastActivity = ? WHERE id = ?",
+  Query3 = "UPDATE chat_participants
+            SET unreadMsgCount = unreadMsgCount + 1
+            WHERE userID != ? AND chatID = ?",
+  ok = db_gen_server:prepared_query(Query2, [Text, Date, ChatID]),
+  ok = db_gen_server:prepared_query(Query3, [State, ChatID]),
 
   %% send online user(-s) new message from chat
   users_manager_gs:ntf_about_new_message_if_online(ChatID, Msg),
@@ -107,6 +109,7 @@ get_chats(State) ->
               cp.userID,
               c.isPersonal,
               c.lastMsg,
+              c.lastActivity,
               (SELECT cp2.unreadMsgCount
                FROM chat_participants cp2
                WHERE cp2.chatID = cp.chatID AND cp2.userID = ?) AS unreadMsgCount
@@ -122,31 +125,33 @@ get_chats(State) ->
   Chats = case Result of
             [] -> null;
             _ -> lists:map(fun(Row) ->
-              [ChatID, ReceiverID, IsPersonal, LastMsg, UnreadMsgCount] = Row,
+              [ChatID, ReceiverID, IsPersonal, LastMsg, LastActivity, UnreadMsgCount] = Row,
               #{chatID => ChatID,
                 receiverID => ReceiverID,
                 isPersonal => IsPersonal,
                 lastMessage => LastMsg,
-                unreadMsgCount => UnreadMsgCount}
+                unreadMsgCount => UnreadMsgCount,
+                lastActivity => LastActivity}
                            end, Result)
           end,
 
   {reply, {text, jsx:encode(#{chats => Chats, res_type => <<"get_chats">>})}, State}.
 
 get_chat(ChatID, State) ->
-  Query = "SELECT chat_participants.chatID, chat_participants.userID, chats.isPersonal, chat_participants.unreadMsgCount
+  Query = "SELECT chat_participants.chatID, chat_participants.userID, chats.isPersonal, chat_participants.unreadMsgCount, chats.lastActivity
            FROM chat_participants
            JOIN chats ON chat_participants.chatID = chats.id
            WHERE chats.id = ?
            AND chat_participants.userID != ?;",
   {ok, _, [Result]} = db_gen_server:prepared_query(Query, [ChatID, State]),
 
-  [ChatID, ReceiverID, IsPersonal, UnreadMsgCount] = Result,
+  [ChatID, ReceiverID, IsPersonal, UnreadMsgCount, LastActivity] = Result,
 
   #{
     chatID => ChatID,
     receiverID => ReceiverID,
     isPersonal => IsPersonal,
     lastMessage => <<"The last message.">>,
-    unreadMsgCount => UnreadMsgCount
+    unreadMsgCount => UnreadMsgCount,
+    lastActivity => LastActivity
   }.
