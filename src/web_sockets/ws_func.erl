@@ -1,5 +1,6 @@
 -module(ws_func).
 -export([create_chat/2, get_messages/2, send_message/2, get_users/1, get_chats/1, get_current_user/1, mark_messages_as_read/2]).
+-export([change_username/2, change_password/2, change_user_avatar/2, change_user_bio/2]).
 
 create_chat(DecodedJSON, State) ->
   ReceiverID = maps:get(<<"receiverID">>, DecodedJSON),
@@ -155,3 +156,31 @@ get_chat(ChatID, State) ->
     unreadMsgCount => UnreadMsgCount,
     lastActivity => LastActivity
   }.
+
+change_username(DecodedJSON, State) ->
+  NewUsername = maps:get(<<"username">>, DecodedJSON),
+  Query = "UPDATE users SET username = ? WHERE id = ?",
+  ok = db_gen_server:prepared_query(Query, [NewUsername, State]),
+
+  {reply, {text, jsx:encode(#{userID => State, res_type => <<"username_has_changed">>})}, State}.
+
+change_password(DecodedJSON, State) ->
+  NewPassword = maps:get(<<"password">>, DecodedJSON),
+  Query = "UPDATE users SET password = ? WHERE id = ?",
+  ok = db_gen_server:prepared_query(Query, [NewPassword, State]),
+
+  {reply, {text, jsx:encode(#{userID => State, res_type => <<"password_has_changed">>})}, State}.
+
+change_user_avatar(DecodedJSON, State) ->
+  NewAvatar = maps:get(<<"avatar">>, DecodedJSON),
+  Query = "UPDATE users SET avatar = ? WHERE id = ?",
+  ok = db_gen_server:prepared_query(Query, [NewAvatar, State]),
+
+  {reply, {text, jsx:encode(#{userID => State, res_type => <<"user_avatar_has_changed">>})}, State}.
+
+change_user_bio(DecodedJSON, State) ->
+  NewBio = maps:get(<<"bio">>, DecodedJSON),
+  Query = "UPDATE users SET bio = ? WHERE id = ?",
+  ok = db_gen_server:prepared_query(Query, [NewBio, State]),
+
+  {reply, {text, jsx:encode(#{userID => State, res_type => <<"user_bio_has_changed">>})}, State}.

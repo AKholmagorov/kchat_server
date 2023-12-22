@@ -36,7 +36,11 @@ websocket_handle({text, JSON}, State) ->
     <<"send_message">> -> ws_func:send_message(DecodedJSON, State);
     <<"mark_messages_as_read">> -> ws_func:mark_messages_as_read(DecodedJSON, State);
     <<"get_messages">> -> ws_func:get_messages(DecodedJSON, State);
-    _ -> {reply, {text, <<"Unknown req_type">>}, State}
+    <<"change_username">> -> ws_func:change_username(DecodedJSON, State);
+    <<"change_password">> -> ws_func:change_password(DecodedJSON, State);
+    <<"change_user_avatar">> -> ws_func:change_user_avatar(DecodedJSON, State);
+    <<"change_user_bio">> -> ws_func:change_user_bio(DecodedJSON, State);
+    _ -> {reply, {text, jsx:encode(#{res_type => <<"Unknown request">>})}, State}
   end.
 
 websocket_info({user_status_updated, ID, NewStatus, UpdatedLastSeen}, State) ->
