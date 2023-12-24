@@ -1,7 +1,7 @@
 -module(ws_func).
 -export([create_chat/2, create_group/2]).
 -export([get_messages/2, send_message/2, get_users/1, get_chats/1, mark_messages_as_read/2, get_groups/1]).
--export([change_profile_data/2]).
+-export([change_profile_data/2, add_user_to_group/2]).
 
 create_chat(DecodedJSON, State) ->
   ReceiverID = maps:get(<<"receiverID">>, DecodedJSON),
@@ -26,8 +26,8 @@ create_group(DecodedJSON, State) ->
   Avatar = maps:get(<<"avatar">>, GroupData),
 
   %% create chat for group
-  Query0 = "INSERT INTO chats (isPersonal) values (0)",
-  ok = db_gen_server:exe_query(Query0),
+  Query0 = "INSERT INTO chats (lastActivity, lastMsg, isPersonal) values (?, \"group has created\", 0)",
+  ok = db_gen_server:prepared_query(Query0, [erlang:system_time(seconds)]),
   {ok, _, [[GroupChatID]]} = db_gen_server:exe_query(<<"SELECT LAST_INSERT_ID()">>),
 
   %% create new group and connect with chat
@@ -46,14 +46,38 @@ create_group(DecodedJSON, State) ->
   Query3 = "INSERT INTO chat_participants (chatID, userID) VALUES(?, ?)",
   ok = db_gen_server:prepared_query(Query3, [GroupChatID, State]),
 
-  NewGroupInstance = #{chatID => GroupChatID,
+  NewChatInstance = get_chat(GroupChatID, State),
+  NewGroupInstance = get_group(GroupChatID),
+
+  io:format("group instance: ~p~n", [NewGroupInstance]),
+  io:format("chat instance: ~p~n", [NewChatInstance]),
+
+  {reply, {text, jsx:encode(#{res_type => <<"group_invitation">>, chat => NewChatInstance, group => NewGroupInstance})}, State}.
+
+get_group(ChatID) ->
+  Query0 = "SELECT
+              gc.name,
+              gc.avatar,
+              gc.membersCount,
+              gc.adminID
+           FROM
+              group_chats gc
+           WHERE gc.chatID = ?",
+  {ok, _, [Result]} = db_gen_server:prepared_query(Query0, [ChatID]),
+  [Name, Avatar, MembersCount, AdminID] = Result,
+
+  Query1 = "SELECT userID FROM chat_participants WHERE chatID = ?",
+  {ok, _, MembersID} = db_gen_server:prepared_query(Query1, [ChatID]),
+
+  %% return value
+  #{
+    chatID => ChatID,
+    adminID => AdminID,
     name => Name,
     avatar => Avatar,
-    lastMsg => <<" ">>,
-    unreadMsgCount => 0,
-    lastActivity => 0},
-
-  {reply, {text, jsx:encode(#{res_type => <<"group_invitation">>, chat => NewGroupInstance})}, State}.
+    membersCount => MembersCount,
+    membersID => lists:flatten(MembersID)
+  }.
 
 get_messages(DecodedJSON, State) ->
   ChatID = maps:get(<<"chatID">>, DecodedJSON),
@@ -135,9 +159,9 @@ get_users(State) ->
 
 get_groups(State) ->
   Query0 = "SELECT chatID, name, avatar, membersCount, adminID
-           FROM group_chats
-           WHERE chatID IN
-            (SELECT chatID FROM chat_participants WHERE userID = ?)",
+            FROM group_chats
+            WHERE chatID IN
+              (SELECT chatID FROM chat_participants WHERE userID = ?)",
   {ok, _, Rows} = db_gen_server:prepared_query(Query0, [State]),
 
   Query1 = "SELECT userID FROM chat_participants WHERE chatID = ?",
@@ -145,9 +169,8 @@ get_groups(State) ->
   Groups = lists:map(
     fun(Row) ->
       [ChatID, Name, Avatar, MembersCount, AdminID] = Row,
-      {ok, _, [MembersID]} = db_gen_server:prepared_query(Query1, [ChatID]),
-      io:format("PP: ~p~n", [MembersID]),
-      #{chatID => ChatID, name => Name, avatar => Avatar, membersCount => MembersCount, adminID => AdminID, membersID => MembersID}
+      {ok, _, MembersID} = db_gen_server:prepared_query(Query1, [ChatID]),
+      #{chatID => ChatID, name => Name, avatar => Avatar, membersCount => MembersCount, adminID => AdminID, membersID => lists:flatten(MembersID)}
     end, Rows),
 
   {reply, {text, jsx:encode(#{res_type => <<"get_groups">>, groups => Groups})}, State}.
@@ -168,8 +191,10 @@ get_chats(State) ->
           JOIN
               chats c ON cp.chatID = c.id
           WHERE
-              cp.chatID IN (SELECT chatID FROM chat_participants WHERE userID = ?)
-              AND cp.userID != ? OR c.isPersonal = 0 AND cp.userID = ?",
+              cp.chatID IN
+                (SELECT chatID FROM chat_participants WHERE userID = ?)
+              AND cp.userID != ? AND c.isPersonal = 1
+              OR c.isPersonal = 0 AND cp.userID = ?",
   {ok, _, Result} = db_gen_server:prepared_query(Query0, [State, State, State, State]),
 
   Chats = case Result of
@@ -188,6 +213,7 @@ get_chats(State) ->
                     Query1 = "SELECT name, avatar FROM group_chats WHERE chatID = ?",
                     {ok, _, [GroupData]} = db_gen_server:prepared_query(Query1, [ChatID]),
                     [GroupName, GroupAvatar] = GroupData,
+                    io:format("~p is personal: ~p~n", [GroupName, IsPersonal]),
                     #{chatID => ChatID,
                       name => GroupName,
                       avatar => GroupAvatar,
@@ -202,12 +228,13 @@ get_chats(State) ->
   {reply, {text, jsx:encode(#{chats => Chats, res_type => <<"get_chats">>})}, State}.
 
 get_chat(ChatID, State) ->
-  Query = "SELECT chat_participants.chatID, chat_participants.userID, chats.isPersonal, chat_participants.unreadMsgCount, chats.lastActivity
-           FROM chat_participants
-           JOIN chats ON chat_participants.chatID = chats.id
+  Query = "SELECT cp.chatID, cp.userID, chats.isPersonal, cp.unreadMsgCount, chats.lastActivity
+           FROM chat_participants cp
+           JOIN chats ON cp.chatID = chats.id
            WHERE chats.id = ?
-           AND chat_participants.userID != ?;",
-  {ok, _, [Result]} = db_gen_server:prepared_query(Query, [ChatID, State]),
+           AND cp.userID != ? AND chats.isPersonal = 1
+           OR chats.isPersonal = 0 AND cp.userID = ? AND chats.id = ?",
+  {ok, _, [Result]} = db_gen_server:prepared_query(Query, [ChatID, State, State, ChatID]),
 
   [ChatID, ReceiverID, IsPersonal, UnreadMsgCount, LastActivity] = Result,
 
@@ -234,3 +261,25 @@ change_profile_data(DecodedJSON, State) ->
   ok = db_gen_server:prepared_query(Query, [Data, State]),
 
   {reply, {text, jsx:encode(#{userID => State, res_type => <<"info_has_changed">>})}, State}.
+
+add_user_to_group(DecodedJSON, State) ->
+  ChatID = maps:get(<<"chatID">>, DecodedJSON),
+  UserID = maps:get(<<"userID">>, DecodedJSON),
+
+  %% add user to chat
+  Query0 = "INSERT INTO chat_participants (chatID, userID)
+           VALUES (?, ?)",
+  ok = db_gen_server:prepared_query(Query0, [ChatID, UserID]),
+
+  %% update members count
+  Query1 = "UPDATE group_chats SET membersCount = membersCount + 1 WHERE chatID = ?",
+  ok = db_gen_server:prepared_query(Query1, [ChatID]),
+
+  NewChatInstance = get_chat(ChatID, State),
+  NewGroupInstance = get_group(ChatID),
+
+  %% send online users ntf about new member (only for group members)
+  users_manager_gs:ntf_about_new_group_member(ChatID, UserID),
+  users_manager_gs:ntf_about_group_invitation(NewChatInstance, NewGroupInstance, UserID),
+
+  {reply, {text, jsx:encode(#{res_type => <<"Member has added.">>})}, State}.

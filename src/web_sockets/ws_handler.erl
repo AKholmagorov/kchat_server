@@ -37,6 +37,7 @@ websocket_handle({text, JSON}, State) ->
     <<"mark_messages_as_read">> -> ws_func:mark_messages_as_read(DecodedJSON, State);
     <<"get_messages">> -> ws_func:get_messages(DecodedJSON, State);
     <<"create_group">> -> ws_func:create_group(DecodedJSON, State);
+    <<"add_user_to_group">> -> ws_func:add_user_to_group(DecodedJSON, State);
     <<"change_profile_data">> -> ws_func:change_profile_data(DecodedJSON, State);
     _ -> {reply, {text, jsx:encode(#{res_type => <<"Unknown request">>})}, State}
   end.
@@ -54,6 +55,12 @@ websocket_info({chat_invitation, NewChatInstance}, State) ->
 
 websocket_info({ntf_about_new_message_if_online, Msg}, State) ->
   {[{text, jsx:encode(#{res_type => <<"new_message">>, msg => Msg})}], State};
+
+websocket_info({ntf_about_new_group_member, ChatID, NewMemberID}, State) ->
+  {[{text, jsx:encode(#{res_type => <<"new_group_member">>, chatID => ChatID, newMemberID => NewMemberID})}], State};
+
+websocket_info({ntf_about_group_invitation, NewChatInstance, NewGroupInstance}, State) ->
+  {[{text, jsx:encode(#{res_type => <<"group_invitation">>, chat => NewChatInstance, group => NewGroupInstance})}], State};
 
 websocket_info({broadcast_msgs_have_read, ChatID}, State) ->
   {[{text, jsx:encode(#{res_type => <<"messages_read">>, chatID => ChatID})}], State}.
