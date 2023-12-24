@@ -29,17 +29,15 @@ websocket_init(State) ->
 websocket_handle({text, JSON}, State) ->
   DecodedJSON = jsx:decode(JSON, [return_maps]),
   case maps:get(<<"req_type">>, DecodedJSON) of
-    <<"get_current_user">> -> ws_func:get_current_user(State);
     <<"get_users">> -> ws_func:get_users(State);
     <<"get_chats">> -> ws_func:get_chats(State);
+    <<"get_groups">> -> ws_func:get_groups(State);
     <<"create_chat">> -> ws_func:create_chat(DecodedJSON, State);
     <<"send_message">> -> ws_func:send_message(DecodedJSON, State);
     <<"mark_messages_as_read">> -> ws_func:mark_messages_as_read(DecodedJSON, State);
     <<"get_messages">> -> ws_func:get_messages(DecodedJSON, State);
-    <<"change_username">> -> ws_func:change_username(DecodedJSON, State);
-    <<"change_password">> -> ws_func:change_password(DecodedJSON, State);
-    <<"change_user_avatar">> -> ws_func:change_user_avatar(DecodedJSON, State);
-    <<"change_user_bio">> -> ws_func:change_user_bio(DecodedJSON, State);
+    <<"create_group">> -> ws_func:create_group(DecodedJSON, State);
+    <<"change_profile_data">> -> ws_func:change_profile_data(DecodedJSON, State);
     _ -> {reply, {text, jsx:encode(#{res_type => <<"Unknown request">>})}, State}
   end.
 
