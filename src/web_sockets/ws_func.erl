@@ -1,7 +1,7 @@
 -module(ws_func).
 -export([create_chat/2, create_group/2]).
 -export([get_messages/2, send_message/2, get_users/1, get_chats/1, mark_messages_as_read/2, get_groups/1]).
--export([change_profile_data/2, add_user_to_group/2]).
+-export([change_profile_data/2, add_user_to_group/2, remove_user_from_group/2, remove_group/2]).
 
 create_chat(DecodedJSON, State) ->
   ReceiverID = maps:get(<<"receiverID">>, DecodedJSON),
@@ -48,9 +48,6 @@ create_group(DecodedJSON, State) ->
 
   NewChatInstance = get_chat(GroupChatID, State),
   NewGroupInstance = get_group(GroupChatID),
-
-  io:format("group instance: ~p~n", [NewGroupInstance]),
-  io:format("chat instance: ~p~n", [NewChatInstance]),
 
   {reply, {text, jsx:encode(#{res_type => <<"group_invitation">>, chat => NewChatInstance, group => NewGroupInstance})}, State}.
 
@@ -210,13 +207,11 @@ get_chats(State) ->
                     unreadMsgCount => UnreadMsgCount,
                     lastActivity => LastActivity};
                   0 ->
-                    Query1 = "SELECT name, avatar FROM group_chats WHERE chatID = ?",
+                    Query1 = "SELECT name FROM group_chats WHERE chatID = ?",
                     {ok, _, [GroupData]} = db_gen_server:prepared_query(Query1, [ChatID]),
-                    [GroupName, GroupAvatar] = GroupData,
-                    io:format("~p is personal: ~p~n", [GroupName, IsPersonal]),
+                    [GroupName] = GroupData,
                     #{chatID => ChatID,
                       name => GroupName,
-                      avatar => GroupAvatar,
                       isPersonal => IsPersonal,
                       lastMsg => LastMsg,
                       unreadMsgCount => UnreadMsgCount,
@@ -228,24 +223,27 @@ get_chats(State) ->
   {reply, {text, jsx:encode(#{chats => Chats, res_type => <<"get_chats">>})}, State}.
 
 get_chat(ChatID, State) ->
-  Query = "SELECT cp.chatID, cp.userID, chats.isPersonal, cp.unreadMsgCount, chats.lastActivity
+  Query0 = "SELECT cp.chatID, cp.userID, chats.isPersonal, cp.unreadMsgCount, chats.lastActivity, chats.lastMsg
            FROM chat_participants cp
            JOIN chats ON cp.chatID = chats.id
            WHERE chats.id = ?
            AND cp.userID != ? AND chats.isPersonal = 1
            OR chats.isPersonal = 0 AND cp.userID = ? AND chats.id = ?",
-  {ok, _, [Result]} = db_gen_server:prepared_query(Query, [ChatID, State, State, ChatID]),
 
-  [ChatID, ReceiverID, IsPersonal, UnreadMsgCount, LastActivity] = Result,
+  case db_gen_server:prepared_query(Query0, [ChatID, State, State, ChatID]) of
+    {ok, _, [Result]} ->
+      [ChatID, ReceiverID, IsPersonal, UnreadMsgCount, LastActivity, LastMsg] = Result,
 
-  #{
-    chatID => ChatID,
-    receiverID => ReceiverID,
-    isPersonal => IsPersonal,
-    lastMsg => <<"The last message.">>,
-    unreadMsgCount => UnreadMsgCount,
-    lastActivity => LastActivity
-  }.
+      #{
+        chatID => ChatID,
+        receiverID => ReceiverID,
+        isPersonal => IsPersonal,
+        lastMsg => LastMsg,
+        unreadMsgCount => UnreadMsgCount,
+        lastActivity => LastActivity
+      };
+    _ -> ok
+  end.
 
 change_profile_data(DecodedJSON, State) ->
   Data = maps:get(<<"data">>, DecodedJSON),
@@ -283,3 +281,31 @@ add_user_to_group(DecodedJSON, State) ->
   users_manager_gs:ntf_about_group_invitation(NewChatInstance, NewGroupInstance, UserID),
 
   {reply, {text, jsx:encode(#{res_type => <<"Member has added.">>})}, State}.
+
+remove_user_from_group(DecodedJSON, State) ->
+  ChatID = maps:get(<<"chatID">>, DecodedJSON),
+  UserID = maps:get(<<"userID">>, DecodedJSON),
+  IsForceKick = maps:get(<<"isForceKick">>, DecodedJSON),
+
+  %% ntf online members about leaving
+  users_manager_gs:ntf_about_member_kick(ChatID, UserID, IsForceKick),
+
+  io:format("Start kicking...~n"),
+
+  Query0 = "DELETE FROM chat_participants WHERE chatID = ? AND userID = ?",
+  db_gen_server:prepared_query(Query0, [ChatID, UserID]),
+
+  Query1 = "UPDATE group_chats SET membersCount = membersCount - 1 WHERE chatID = ?",
+  db_gen_server:prepared_query(Query1, [ChatID]),
+
+  {reply, {text, jsx:encode(#{res_type => <<"Member has removed.">>})}, State}.
+
+remove_group(DecodedJSON, State) ->
+  ChatID = maps:get(<<"chatID">>, DecodedJSON),
+
+  users_manager_gs:remove_group_ntf(ChatID),
+
+  Query0 = "DELETE FROM chats WHERE id = ?",
+  ok = db_gen_server:prepared_query(Query0, [ChatID]),
+
+  {reply, {text, jsx:encode(#{})}, State}.

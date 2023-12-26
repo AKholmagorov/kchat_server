@@ -23,7 +23,6 @@ init(Req, State) ->
 
 websocket_init(State) ->
   users_manager_gs:make_user_online(State, self()),
-  io:format("user is online ~p~n", [self()]),
   {ok, State}.
 
 websocket_handle({text, JSON}, State) ->
@@ -37,7 +36,9 @@ websocket_handle({text, JSON}, State) ->
     <<"mark_messages_as_read">> -> ws_func:mark_messages_as_read(DecodedJSON, State);
     <<"get_messages">> -> ws_func:get_messages(DecodedJSON, State);
     <<"create_group">> -> ws_func:create_group(DecodedJSON, State);
+    <<"remove_group">> -> ws_func:remove_group(DecodedJSON, State);
     <<"add_user_to_group">> -> ws_func:add_user_to_group(DecodedJSON, State);
+    <<"remove_user_from_group">> -> ws_func:remove_user_from_group(DecodedJSON, State);
     <<"change_profile_data">> -> ws_func:change_profile_data(DecodedJSON, State);
     _ -> {reply, {text, jsx:encode(#{res_type => <<"Unknown request">>})}, State}
   end.
@@ -63,10 +64,15 @@ websocket_info({ntf_about_group_invitation, NewChatInstance, NewGroupInstance}, 
   {[{text, jsx:encode(#{res_type => <<"group_invitation">>, chat => NewChatInstance, group => NewGroupInstance})}], State};
 
 websocket_info({broadcast_msgs_have_read, ChatID}, State) ->
-  {[{text, jsx:encode(#{res_type => <<"messages_read">>, chatID => ChatID})}], State}.
+  {[{text, jsx:encode(#{res_type => <<"messages_read">>, chatID => ChatID})}], State};
+
+websocket_info({ntf_about_member_kick, ChatID, KickedMemberID, IsForceKick}, State) ->
+  {[{text, jsx:encode(#{res_type => <<"group_member_left">>, chatID => ChatID, userID => KickedMemberID, isForceKick => IsForceKick})}], State};
+
+websocket_info({ntf_about_new_user, User}, State) ->
+  {[{text, jsx:encode(#{res_type => <<"new_user_signed_up">>, user => User})}], State}.
 
 terminate(_Reason, _WebSocket, State) ->
-  io:format("session has terminated~n"),
   case is_number(State) of
     true -> users_manager_gs:make_user_offline(State), ok;
     _ -> ok
