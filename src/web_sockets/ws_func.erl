@@ -26,28 +26,33 @@ create_group(DecodedJSON, State) ->
   Avatar = maps:get(<<"avatar">>, GroupData),
 
   %% create chat for group
-  Query0 = "INSERT INTO chats (lastActivity, lastMsg, isPersonal) values (?, \"group has created\", 0)",
+  Query0 = "INSERT INTO chats (lastActivity, isPersonal) values (?, 0)",
   ok = db_gen_server:prepared_query(Query0, [erlang:system_time(seconds)]),
-  {ok, _, [[GroupChatID]]} = db_gen_server:exe_query(<<"SELECT LAST_INSERT_ID()">>),
+  {ok, _, [[ChatID]]} = db_gen_server:exe_query(<<"SELECT LAST_INSERT_ID()">>),
 
   %% create new group and connect with chat
   %% instigator is admin
   Query1 = "INSERT INTO group_chats (chatID, name, avatar, membersCount, adminID)
             values (?, ?, ?, ?, ?)",
-  ok = db_gen_server:prepared_query(Query1, [GroupChatID, Name, Avatar, 1, State]),
+  ok = db_gen_server:prepared_query(Query1, [ChatID, Name, Avatar, 1, State]),
 
   %% add system message
-  Query2 = "INSERT INTO messages (chatID, senderID, date, text, isRead, isSystemMsg)
-            VALUES (?, ?, ?, ?, ?, ?)",
+  %% code 1: group created
+  Query2 = "INSERT INTO messages (chatID, senderID, date, isRead, code)
+            VALUES (?, ?, ?, ?, 1)",
   CurrentDate = erlang:system_time(seconds),
-  ok = db_gen_server:prepared_query(Query2, [GroupChatID, State, CurrentDate, "group created", 1, 1]),
+  ok = db_gen_server:prepared_query(Query2, [ChatID, State, CurrentDate, 1]),
+  {ok, _, [[MsgID]]} = db_gen_server:exe_query(<<"SELECT LAST_INSERT_ID()">>),
+
+  %% Set lastMsg for new chat
+  ok = db_gen_server:prepared_query(<<"UPDATE chats SET lastMsg = ? WHERE id = ?">>, [MsgID, ChatID]),
 
   %% add instigator to the group
   Query3 = "INSERT INTO chat_participants (chatID, userID) VALUES(?, ?)",
-  ok = db_gen_server:prepared_query(Query3, [GroupChatID, State]),
+  ok = db_gen_server:prepared_query(Query3, [ChatID, State]),
 
-  NewChatInstance = get_chat(GroupChatID, State),
-  NewGroupInstance = get_group(GroupChatID),
+  NewChatInstance = get_chat(ChatID, State),
+  NewGroupInstance = get_group(ChatID),
 
   {reply, {text, jsx:encode(#{res_type => <<"group_invitation">>, chat => NewChatInstance, group => NewGroupInstance})}, State}.
 
@@ -88,14 +93,14 @@ get_messages(DecodedJSON, State) ->
 
   Messages = lists:map(
     fun(Row) ->
-      [MsgID, ChatID, SenderID, Date, Text, IsRead, IsSystemMsg] = Row,
+      [MsgID, ChatID, SenderID, Date, Text, IsRead, Code] = Row,
       #{msgID => MsgID,
         chatID => ChatID,
         senderID => SenderID,
         date => Date,
         text => Text,
         isRead => IsRead,
-        isSystemMsg => IsSystemMsg}
+        code => Code}
     end, Result),
 
   %% notify others that messages was read
@@ -105,7 +110,6 @@ get_messages(DecodedJSON, State) ->
 
 mark_messages_as_read(DecodedJSON, State) ->
   ChatID = maps:get(<<"chatID">>, DecodedJSON),
-  io:format("ChatID is: ~p. Sender ID is: ~p~n", [ChatID, State]),
 
   Query0 = "UPDATE messages SET isRead = 1 WHERE senderID != ? AND chatID = ?",
   ok = db_gen_server:prepared_query(Query0, [State, ChatID]),
@@ -133,13 +137,32 @@ send_message(DecodedJSON, State) ->
   Query3 = "UPDATE chat_participants
             SET unreadMsgCount = unreadMsgCount + 1
             WHERE userID != ? AND chatID = ?",
-  ok = db_gen_server:prepared_query(Query2, [Text, Date, ChatID]),
+  ok = db_gen_server:prepared_query(Query2, [MessageID, Date, ChatID]),
   ok = db_gen_server:prepared_query(Query3, [State, ChatID]),
 
   %% send online user(-s) new message from chat
   users_manager_gs:ntf_about_new_message_if_online(ChatID, Msg),
 
   {reply, {text, jsx:encode(#{res_type => <<"message_sent">>, msgID => MessageID})}, State}.
+
+send_system_message(ChatID, Text, Code) ->
+  CurrentDate = erlang:system_time(seconds),
+
+  Query0 = "INSERT INTO messages (chatID, text, date, code)
+            VALUES(?, ?, ?, ?)",
+  Query1 = "SELECT LAST_INSERT_ID()",
+  ok = db_gen_server:prepared_query(Query0, [ChatID, Text, CurrentDate, Code]),
+  {ok, _, [[MessageID]]} = db_gen_server:exe_query(Query1),
+
+  Query2 = "UPDATE chats SET lastMsg = ?, lastActivity = ? WHERE id = ?",
+  Query3 = "UPDATE chat_participants
+            SET unreadMsgCount = unreadMsgCount + 1
+            WHERE chatID = ?",
+  ok = db_gen_server:prepared_query(Query2, [MessageID, CurrentDate, ChatID]),
+  ok = db_gen_server:prepared_query(Query3, [ChatID]),
+
+  %% send online user(-s) new message from chat
+  users_manager_gs:ntf_about_new_message_if_online(ChatID, get_msg(MessageID)).
 
 get_users(State) ->
   Query = "SELECT id, username, avatar, bio, isOnline, lastSeen
@@ -193,13 +216,16 @@ get_chats(State) ->
                 (SELECT chatID FROM chat_participants WHERE userID = ?)
               AND cp.userID != ? AND c.isPersonal = 1
               OR c.isPersonal = 0 AND cp.userID = ?",
-  {ok, _, Result} = db_gen_server:prepared_query(Query0, [State, State, State, State]),
+  {ok, _, Result0} = db_gen_server:prepared_query(Query0, [State, State, State, State]),
 
-  Chats = case Result of
+  Chats = case Result0 of
             [] -> null;
             _ -> lists:map(
               fun(Row) ->
-                [ChatID, ReceiverID, IsPersonal, LastMsg, LastActivity, UnreadMsgCount] = Row,
+                %% extract chat instance
+                [ChatID, ReceiverID, IsPersonal, LastMsgID, LastActivity, UnreadMsgCount] = Row,
+                LastMsg = get_msg(LastMsgID),
+
                 case IsPersonal of
                   1 -> #{chatID => ChatID,
                     receiverID => ReceiverID,
@@ -218,10 +244,27 @@ get_chats(State) ->
                       unreadMsgCount => UnreadMsgCount,
                       lastActivity => LastActivity}
                 end
-              end, Result)
+              end, Result0)
           end,
 
   {reply, {text, jsx:encode(#{chats => Chats, res_type => <<"get_chats">>})}, State}.
+
+get_msg(MsgID) ->
+  Query0 = "SELECT * FROM messages WHERE id = ?",
+
+  case db_gen_server:prepared_query(Query0, [MsgID]) of
+    {ok, _, [Result]} ->
+      [MsgID, ChatID, SenderID, Date, Text, IsRead, Code] = Result,
+      #{id => MsgID,
+        chatID => ChatID,
+        senderID => SenderID,
+        date => Date,
+        text => Text,
+        isRead => IsRead,
+        code => Code};
+    _ ->
+      null
+  end.
 
 get_chat(ChatID, State) ->
   Query0 = "SELECT cp.chatID, cp.userID, chats.isPersonal, cp.unreadMsgCount, chats.lastActivity, chats.lastMsg
@@ -233,13 +276,13 @@ get_chat(ChatID, State) ->
 
   case db_gen_server:prepared_query(Query0, [ChatID, State, State, ChatID]) of
     {ok, _, [Result]} ->
-      [ChatID, ReceiverID, IsPersonal, UnreadMsgCount, LastActivity, LastMsg] = Result,
+      [ChatID, ReceiverID, IsPersonal, UnreadMsgCount, LastActivity, LastMsgID] = Result,
 
       #{
         chatID => ChatID,
         receiverID => ReceiverID,
         isPersonal => IsPersonal,
-        lastMsg => LastMsg,
+        lastMsg => get_msg(LastMsgID),
         unreadMsgCount => UnreadMsgCount,
         lastActivity => LastActivity
       };
@@ -277,6 +320,9 @@ add_user_to_group(DecodedJSON, State) ->
   NewChatInstance = get_chat(ChatID, State),
   NewGroupInstance = get_group(ChatID),
 
+  {ok, _, [[Username]]} = db_gen_server:prepared_query(<<"SELECT username FROM users WHERE id = ?">>, [UserID]),
+  send_system_message(ChatID, Username, 2), %% code 2: user has joined to group
+
   %% send online users ntf about new member (only for group members)
   users_manager_gs:ntf_about_new_group_member(ChatID, UserID),
   users_manager_gs:ntf_about_group_invitation(NewChatInstance, NewGroupInstance, UserID),
@@ -287,6 +333,12 @@ remove_user_from_group(DecodedJSON, State) ->
   ChatID = maps:get(<<"chatID">>, DecodedJSON),
   UserID = maps:get(<<"userID">>, DecodedJSON),
   IsForceKick = maps:get(<<"isForceKick">>, DecodedJSON),
+
+  {ok, _, [[Username]]} = db_gen_server:prepared_query(<<"SELECT username FROM users WHERE id = ?">>, [UserID]),
+  case IsForceKick of
+    true -> send_system_message(ChatID, Username, 3); %% code 3: user has kicked from group
+    false -> send_system_message(ChatID, Username, 4) %% code 4: user has left group
+  end,
 
   %% ntf online members about leaving
   users_manager_gs:ntf_about_member_kick(ChatID, UserID, IsForceKick),

@@ -154,7 +154,7 @@ handle_cast({ntf_about_new_chat_if_online, ReceiverID, NewChatInstance}, State) 
 
 handle_cast({ntf_about_new_message_if_online, ChatID, Msg}, State) ->
   OnlineUsersID = maps:keys(State),
-  SenderID = maps:get(<<"senderID">>, Msg),
+  SenderID = maps:get(<<"senderID">>, Msg, -1), %% -1 is mark for system messages
 
   Query = "SELECT COUNT(*) FROM chat_participants WHERE chatID = ? AND userID = ? AND userID != ?",
 
