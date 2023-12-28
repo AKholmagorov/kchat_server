@@ -140,7 +140,6 @@ handle_call({ntf_about_member_kick, ChatID, KickedMemberID, IsForceKick}, _From,
       end
     end, OnlineUsersID),
 
-  io:format("All notifications have sent~n"),
   {reply, ok, State}.
 
 handle_cast({ntf_about_new_chat_if_online, ReceiverID, NewChatInstance}, State) ->
@@ -170,7 +169,10 @@ handle_cast({ntf_about_new_message_if_online, ChatID, Msg}, State) ->
   {noreply, State};
 
 handle_cast({broadcast_online_status, UpdatedUserID, NewStatus}, State) ->
-  maps:fold(fun(_ID, Pid, _Acc) -> Pid ! {user_status_updated, UpdatedUserID, NewStatus, null} end, 0, State),
+  maps:fold(
+    fun(_ID, Pid, _Acc) ->
+      Pid ! {user_status_updated, UpdatedUserID, NewStatus, null}
+    end, 0, State),
   {noreply, State};
 
 handle_cast({broadcast_offline_status, UpdatedUserID, NewStatus, UpdatedLastSeen}, State) ->

@@ -80,8 +80,8 @@ get_messages(DecodedJSON, State) ->
   ChatID = maps:get(<<"chatID">>, DecodedJSON),
 
   %% mark fetched messages as read TODO: refactor on fun call
-  Query0 = "UPDATE messages SET isRead = 1 WHERE senderID != ?",
-  ok = db_gen_server:prepared_query(Query0, [State]),
+  Query0 = "UPDATE messages SET isRead = 1 WHERE senderID != ? AND chatID = ?",
+  ok = db_gen_server:prepared_query(Query0, [State, ChatID]),
 
   Query1 = "SELECT * FROM messages WHERE chatID = ?",
   {ok, _, Result} = db_gen_server:prepared_query(Query1, [ChatID]),
@@ -104,7 +104,8 @@ get_messages(DecodedJSON, State) ->
   {reply, {text, jsx:encode(#{res_type => <<"get_messages">>, chatID => ChatID, messages => Messages})}, State}.
 
 mark_messages_as_read(DecodedJSON, State) ->
-  ChatID = map_get(<<"chatID">>, DecodedJSON),
+  ChatID = maps:get(<<"chatID">>, DecodedJSON),
+  io:format("ChatID is: ~p. Sender ID is: ~p~n", [ChatID, State]),
 
   Query0 = "UPDATE messages SET isRead = 1 WHERE senderID != ? AND chatID = ?",
   ok = db_gen_server:prepared_query(Query0, [State, ChatID]),
@@ -289,8 +290,6 @@ remove_user_from_group(DecodedJSON, State) ->
 
   %% ntf online members about leaving
   users_manager_gs:ntf_about_member_kick(ChatID, UserID, IsForceKick),
-
-  io:format("Start kicking...~n"),
 
   Query0 = "DELETE FROM chat_participants WHERE chatID = ? AND userID = ?",
   db_gen_server:prepared_query(Query0, [ChatID, UserID]),
