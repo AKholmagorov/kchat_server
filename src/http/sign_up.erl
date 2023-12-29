@@ -16,9 +16,9 @@ init(Req, State) ->
              ok ->
                Query2 = "SELECT id FROM users WHERE username = ?",
                {ok, _, [[ID]]} = db_gen_server:prepared_query(Query2, [Username]),
-               jsx:encode(#{status => true, jwt => my_jwt:generate_jwk(ID)}),
                %% ntf online users about newbie
-               users_manager_gs:ntf_about_new_user(ID);
+               users_manager_gs:ntf_about_new_user(ID),
+               jsx:encode(#{status => true, jwt => my_jwt:generate_jwk(ID)});
              _ ->
                jsx:encode(#{status => false})
            end,

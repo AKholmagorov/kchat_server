@@ -308,48 +308,62 @@ add_user_to_group(DecodedJSON, State) ->
   ChatID = maps:get(<<"chatID">>, DecodedJSON),
   UserID = maps:get(<<"userID">>, DecodedJSON),
 
-  %% add user to chat
-  Query0 = "INSERT INTO chat_participants (chatID, userID)
+  IsUserInChatQuery = "SELECT COUNT(*) FROM chat_participants WHERE userID = ? AND chatID = ?",
+
+  case db_gen_server:prepared_query(IsUserInChatQuery, [UserID, ChatID]) of
+    [[0]] ->
+      %% add user to chat
+      Query0 = "INSERT INTO chat_participants (chatID, userID)
            VALUES (?, ?)",
-  ok = db_gen_server:prepared_query(Query0, [ChatID, UserID]),
+      ok = db_gen_server:prepared_query(Query0, [ChatID, UserID]),
 
-  %% update members count
-  Query1 = "UPDATE group_chats SET membersCount = membersCount + 1 WHERE chatID = ?",
-  ok = db_gen_server:prepared_query(Query1, [ChatID]),
+      %% update members count
+      Query1 = "UPDATE group_chats SET membersCount = membersCount + 1 WHERE chatID = ?",
+      ok = db_gen_server:prepared_query(Query1, [ChatID]),
 
-  NewChatInstance = get_chat(ChatID, State),
-  NewGroupInstance = get_group(ChatID),
+      NewChatInstance = get_chat(ChatID, State),
+      NewGroupInstance = get_group(ChatID),
 
-  {ok, _, [[Username]]} = db_gen_server:prepared_query(<<"SELECT username FROM users WHERE id = ?">>, [UserID]),
-  send_system_message(ChatID, Username, 2), %% code 2: user has joined to group
+      {ok, _, [[Username]]} = db_gen_server:prepared_query(<<"SELECT username FROM users WHERE id = ?">>, [UserID]),
+      send_system_message(ChatID, Username, 2), %% code 2: user has joined to group
 
-  %% send online users ntf about new member (only for group members)
-  users_manager_gs:ntf_about_new_group_member(ChatID, UserID),
-  users_manager_gs:ntf_about_group_invitation(NewChatInstance, NewGroupInstance, UserID),
+      %% send online users ntf about new member (only for group members)
+      users_manager_gs:ntf_about_new_group_member(ChatID, UserID),
+      users_manager_gs:ntf_about_group_invitation(NewChatInstance, NewGroupInstance, UserID),
 
-  {reply, {text, jsx:encode(#{res_type => <<"Member has added.">>})}, State}.
+      {reply, {text, jsx:encode(#{res_type => <<"Member has added.">>})}, State};
+    _ ->
+      {reply, {text, jsx:encode(#{res_type => <<"user_already_in_the_group">>})}, State}
+  end.
 
 remove_user_from_group(DecodedJSON, State) ->
   ChatID = maps:get(<<"chatID">>, DecodedJSON),
   UserID = maps:get(<<"userID">>, DecodedJSON),
   IsForceKick = maps:get(<<"isForceKick">>, DecodedJSON),
 
-  {ok, _, [[Username]]} = db_gen_server:prepared_query(<<"SELECT username FROM users WHERE id = ?">>, [UserID]),
-  case IsForceKick of
-    true -> send_system_message(ChatID, Username, 3); %% code 3: user has kicked from group
-    false -> send_system_message(ChatID, Username, 4) %% code 4: user has left group
-  end,
+  IsUserInChatQuery = "SELECT COUNT(*) FROM chat_participants WHERE userID = ? AND chatID = ?",
 
-  %% ntf online members about leaving
-  users_manager_gs:ntf_about_member_kick(ChatID, UserID, IsForceKick),
+  case db_gen_server:prepared_query(IsUserInChatQuery, [UserID, ChatID]) of
+    {ok, _, [[1]]} ->
+      {ok, _, [[Username]]} = db_gen_server:prepared_query(<<"SELECT username FROM users WHERE id = ?">>, [UserID]),
+      case IsForceKick of
+        true -> send_system_message(ChatID, Username, 3); %% code 3: user has kicked from group
+        false -> send_system_message(ChatID, Username, 4) %% code 4: user has left group
+      end,
 
-  Query0 = "DELETE FROM chat_participants WHERE chatID = ? AND userID = ?",
-  db_gen_server:prepared_query(Query0, [ChatID, UserID]),
+      %% ntf online members about leaving
+      users_manager_gs:ntf_about_member_kick(ChatID, UserID, IsForceKick),
 
-  Query1 = "UPDATE group_chats SET membersCount = membersCount - 1 WHERE chatID = ?",
-  db_gen_server:prepared_query(Query1, [ChatID]),
+      Query0 = "DELETE FROM chat_participants WHERE chatID = ? AND userID = ?",
+      db_gen_server:prepared_query(Query0, [ChatID, UserID]),
 
-  {reply, {text, jsx:encode(#{res_type => <<"Member has removed.">>})}, State}.
+      Query1 = "UPDATE group_chats SET membersCount = membersCount - 1 WHERE chatID = ?",
+      db_gen_server:prepared_query(Query1, [ChatID]),
+
+      {reply, {text, jsx:encode(#{res_type => <<"member_has_removed.">>})}, State};
+    _ ->
+      {reply, {text, jsx:encode(#{res_type => <<"no_such_member_in_the_group.">>})}, State}
+  end.
 
 remove_group(DecodedJSON, State) ->
   ChatID = maps:get(<<"chatID">>, DecodedJSON),
