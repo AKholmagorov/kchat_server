@@ -45,3 +45,12 @@ Go to the root of the project and execute follow:
     $ rebar3 shell
     $ main:start().
 
+Extra
+-----
+If you exit from rebar3 shell and haven't stop lauched server proc, you need to kill it by hang:
+
+    $ lsof -i :80
+
+Then copy proc PID and execute this:
+
+    $ kill -9 <PID>
