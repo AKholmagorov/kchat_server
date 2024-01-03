@@ -1,7 +1,7 @@
 -module(my_jwt).
 -export([generate_jwk/1, load_jwk/0]).
 
--define(JWK_FILE, "/home/casper/Projects/Erlang/kchat_server/jwk.json").
+-define(JWK_FILE, "/kchat_server/jwk.json").
 
 generate_jwk(UserID) ->
   Payload = #{<<"id">> => UserID},
